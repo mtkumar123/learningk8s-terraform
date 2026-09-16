@@ -1,1 +1,1 @@
-Playing around with k8s terraform and calico
+Playing around with eks terraform
