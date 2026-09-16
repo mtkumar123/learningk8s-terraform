@@ -1,0 +1,206 @@
+#!/bin/bash
+# =============================================================================
+# CONTROL-PLANE bootstrap (Amazon Linux 2023, arm64) - HA aware.
+#
+# All 3 control planes share this script. Behaviour branches on is_primary:
+#   PRIMARY (index 0): kubeadm init (HA endpoint + upload-certs) -> Calico ->
+#                      publish worker join cmd + control-plane join cmd to SSM
+#   SECONDARY (1,2):   poll SSM for the control-plane join cmd -> join --control-plane
+#
+# Template variables:
+#   ${kubernetes_version}         e.g. 1.36
+#   ${pod_cidr}                   e.g. 192.168.0.0/16
+#   ${region}                     e.g. eu-west-1
+#   ${join_command_param_name}    worker join cmd SSM param
+#   ${cp_join_command_param_name} control-plane join cmd SSM param
+#   ${calico_version}             e.g. v3.32.2
+#   ${nlb_endpoint}               NLB DNS name (the --control-plane-endpoint)
+#   ${is_primary}                 "true" on index 0, else "false"
+#   ${vpc_dns_ip}                 VPC resolver IP (VPC CIDR base + 2, e.g. 10.0.0.2)
+#
+# Logs: /var/log/cloud-init-output.log
+# =============================================================================
+set -euxo pipefail
+
+# ---- Hostname (unique per control plane: control-plane-1/2/3) --------------
+hostnamectl set-hostname "${node_name}"
+
+# ---- Shared prereqs (all control planes) -----------------------------------
+cat <<'EOF' >/etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+modprobe overlay
+modprobe br_netfilter
+
+cat <<'EOF' >/etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+sysctl --system
+
+swapoff -a || true
+sed -i '/ swap / s/^/#/' /etc/fstab || true
+
+dnf install -y containerd
+mkdir -p /etc/containerd
+containerd config default >/etc/containerd/config.toml
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+systemctl enable --now containerd
+systemctl restart containerd
+
+cat <<EOF >/etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/rpm/repodata/repomd.xml.key
+exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
+EOF
+dnf install -y kubelet kubeadm kubectl --disableexcludes=kubernetes
+systemctl enable --now kubelet
+
+CP_ENDPOINT="${nlb_endpoint}:6443"
+
+# Discover our own private IP (IMDSv2). The API server cert is valid for this
+# IP, so local bootstrap commands use it directly (NOT 127.0.0.1, which is not
+# in the cert, and NOT the NLB, which isn't healthy yet).
+IMDS_TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+  http://169.254.169.254/latest/meta-data/local-ipv4)
+LOCAL_API="https://$PRIVATE_IP:6443"
+
+# ===========================================================================
+if [ "${is_primary}" = "true" ]; then
+  # ---- PRIMARY: initialize the cluster ------------------------------------
+  kubeadm init \
+    --control-plane-endpoint="$CP_ENDPOINT" \
+    --upload-certs \
+    --pod-network-cidr=${pod_cidr}
+
+  # kubeconfig for root (points at the NLB endpoint, for normal admin use)
+  mkdir -p /root/.kube
+  cp -f /etc/kubernetes/admin.conf /root/.kube/config
+  export KUBECONFIG=/etc/kubernetes/admin.conf
+
+  # Local bootstrap commands (Calico apply, health check) talk DIRECTLY to this
+  # node's API server via --server="$LOCAL_API" (the node's own private IP).
+  # This is simpler and faster than routing through the NLB, and avoids relying
+  # on the NLB having marked this node a healthy target yet (~20s after boot).
+  # admin.conf still provides the credentials/CA; we only override the endpoint.
+  # (kubeadm token/upload-certs commands DO go through admin.conf -> the NLB;
+  # that loops back to this node fine because the target group has
+  # preserve_client_ip disabled -- see nlb.tf.)
+
+  # Wait until the local API server actually answers before applying Calico.
+  for i in $(seq 1 30); do
+    if kubectl --server="$LOCAL_API" get --raw='/healthz' >/dev/null 2>&1; then
+      echo "local API server ready after $i attempt(s)"
+      break
+    fi
+    echo "waiting for local API server ($i/30)..."
+    sleep 5
+  done
+
+  # Install Calico (operator + Installation with our pod CIDR), via localhost.
+  # The operator uses default API discovery (kubernetes Service ClusterIP
+  # 10.96.0.1). kube-proxy DNATs that to the API server's host IP, which is
+  # reachable pre-CNI, and the operator retries until that rule is programmed.
+  kubectl --server="$LOCAL_API" create -f https://raw.githubusercontent.com/projectcalico/calico/${calico_version}/manifests/tigera-operator.yaml
+
+  # The operator registers CRDs asynchronously, so the Installation CRD may not
+  # exist yet (plain `kubectl wait` errors NotFound on a missing object). Poll
+  # until the CRD APPEARS, then wait for it to be ESTABLISHED, before creating
+  # the Installation (see projectcalico/calico#4612).
+  for i in $(seq 1 30); do
+    if kubectl --server="$LOCAL_API" get crd installations.operator.tigera.io >/dev/null 2>&1; then
+      kubectl --server="$LOCAL_API" wait --for=condition=established --timeout=60s \
+        crd/installations.operator.tigera.io
+      break
+    fi
+    echo "waiting for Installation CRD to appear ($i/30)..."
+    sleep 5
+  done
+
+  cat <<EOF >/root/calico-config.yaml
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    ipPools:
+    - blockSize: 26
+      cidr: ${pod_cidr}
+      encapsulation: VXLANCrossSubnet
+      natOutgoing: Enabled
+      nodeSelector: all()
+  # calico-node pods (incl. the install-cni init container) run with
+  # dnsPolicy: ClusterFirstWithHostNet, so their resolv.conf points at the
+  # CoreDNS ClusterIP (10.96.0.10). That is UNREACHABLE on a node whose CNI
+  # isn't installed yet -- but install-cni must resolve the NLB FQDN
+  # (--control-plane-endpoint) to create its kubeconfig token. Chicken-and-egg:
+  # the CNI installer needs DNS that needs the CNI. We break it by appending the
+  # VPC resolver as a SECOND nameserver. ClusterFirstWithHostNet is kept, so
+  # resolv.conf ends up with BOTH 10.96.0.10 (CoreDNS, for in-cluster services)
+  # and ${vpc_dns_ip} (VPC resolver, resolves the NLB FQDN with no CNI). The VPC
+  # resolver lives in the node's own network namespace, so it's reachable
+  # pre-CNI. ndots:2 stops the 4-dot NLB FQDN from being tried against every
+  # cluster search-suffix first. Set declaratively here (operator API) so it's
+  # owned by the Installation and survives reconciles.
+  calicoNodeDaemonSet:
+    spec:
+      template:
+        spec:
+          dnsConfig:
+            nameservers:
+            - ${vpc_dns_ip}
+            options:
+            - name: ndots
+              value: "2"
+EOF
+  kubectl --server="$LOCAL_API" create -f /root/calico-config.yaml
+
+  # Wait for the node to go Ready (CNI working) before publishing join commands.
+  kubectl --server="$LOCAL_API" wait --for=condition=Ready node --all --timeout=180s || true
+
+  # Publish the WORKER join command
+  WORKER_JOIN=$(kubeadm token create --print-join-command)
+  aws ssm put-parameter --name "${join_command_param_name}" \
+    --value "$WORKER_JOIN" --type String --overwrite --region ${region}
+
+  # Publish the CONTROL-PLANE join command (re-upload certs to get a fresh key)
+  CERT_KEY=$(kubeadm init phase upload-certs --upload-certs 2>/dev/null | tail -1)
+  CP_JOIN=$(kubeadm token create --print-join-command --certificate-key "$CERT_KEY")
+  aws ssm put-parameter --name "${cp_join_command_param_name}" \
+    --value "$CP_JOIN" --type String --overwrite --region ${region}
+
+  echo "primary control-plane bootstrap complete (endpoint $CP_ENDPOINT)"
+
+else
+  # ---- SECONDARY: wait for the primary, then join as a control plane ------
+  CP_JOIN="pending"
+  for i in $(seq 1 80); do
+    CP_JOIN=$(aws ssm get-parameter --name "${cp_join_command_param_name}" \
+      --region ${region} --query "Parameter.Value" --output text 2>/dev/null || echo "pending")
+    if [ "$CP_JOIN" != "pending" ] && [ -n "$CP_JOIN" ]; then
+      echo "control-plane join command retrieved after $i attempt(s)"
+      break
+    fi
+    echo "cp join command not ready yet (attempt $i/80), waiting 15s..."
+    sleep 15
+  done
+
+  if [ "$CP_JOIN" = "pending" ] || [ -z "$CP_JOIN" ]; then
+    echo "ERROR: control-plane join command never became available" >&2
+    exit 1
+  fi
+
+  # The published command already includes --control-plane --certificate-key
+  eval "$CP_JOIN"
+
+  echo "secondary control-plane bootstrap complete"
+fi

@@ -1,0 +1,24 @@
+# Terraform state — contains a full record of your infra and can hold
+# secrets. Never commit it. (For solo learning we keep it local.)
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Provider plugins / modules downloaded by `terraform init`
+.terraform/
+
+# Backend config is kept local only -- it hardcodes the S3 bucket/account
+# (backends can't use variables). Without this file a clone uses LOCAL state,
+# which is fine for others. We keep our copy locally to keep using S3.
+backend.tf
+
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored -- the provider
+# lock file should be committed so clones resolve identical provider versions.
+
+# Your actual variable values (may contain account-specific data)
+*.tfvars
+!example.tfvars
+
+# Crash logs
+crash.log
+crash.*.log
