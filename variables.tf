@@ -26,6 +26,11 @@ variable "kubernetes_version" {
   default     = "1.36"
 }
 
+variable "admin_role_arn" {
+  description = "IAM role ARN granted cluster-admin via an EKS access entry (your SSO role). Set in terraform.tfvars (not committed); see example.tfvars. Use the underlying role ARN under /aws-reserved/sso.amazonaws.com/, NOT the assumed-role session ARN."
+  type        = string
+}
+
 # ---- Networking -------------------------------------------------------------
 
 variable "vpc_cidr" {
