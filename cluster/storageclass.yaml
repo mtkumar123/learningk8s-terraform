@@ -1,5 +1,9 @@
 # gp3 StorageClass backed by the EBS CSI driver, marked as the cluster default.
 #
+# This is CLUSTER-LEVEL infrastructure (shared by any app that needs storage),
+# NOT part of the Mealie app -- hence it lives in cluster/ and is applied once,
+# separately from the Mealie Helm chart.
+#
 # - provisioner: the EBS CSI driver (installed as an add-on via Terraform).
 # - volumeBindingMode: WaitForFirstConsumer -> the EBS volume is created in the
 #   SAME AZ as the pod that will use it. Critical on multi-AZ clusters: EBS is
