@@ -42,7 +42,7 @@ spec:
             # via port-forward, localhost is fine; we'll update it to the load
             # balancer DNS once the LoadBalancer Service is created.
             - name: BASE_URL
-              value: "http://localhost:9925"
+              value: "http://k8s-mealie-mealie-4f7f9fc320-365151721.eu-west-1.elb.amazonaws.com"
           # Mealie stores its SQLite DB + data here; backed by the PVC.
           volumeMounts:
             - name: data
