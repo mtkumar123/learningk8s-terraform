@@ -1,0 +1,14 @@
+# Persistent storage for Wallabag's SQLite DB + article images
+# (/var/www/wallabag/data). The DB schema is created here on first boot and
+# must persist so init runs only once.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wallabag-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.storage.className }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.size }}

@@ -57,6 +57,12 @@ variable "public_subnet_cidr_b" {
   default     = "10.0.1.0/24"
 }
 
+variable "public_subnet_cidr_c" {
+  description = "CIDR for the third public subnet. Optional extra AZ coverage for internet-facing ALBs. Lives in availability_zones[2]."
+  type        = string
+  default     = "10.0.2.0/24"
+}
+
 variable "private_subnet_cidrs" {
   description = "CIDRs for the private subnets (hold the worker nodes). One per AZ."
   type        = list(string)

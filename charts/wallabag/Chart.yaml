@@ -1,0 +1,10 @@
+# Chart metadata. Identifies the package to Helm.
+apiVersion: v2 # chart format; v2 is the current Helm 3/4 format
+name: wallabag
+description: Wallabag read-it-later app (SQLite) exposed via an internet-facing ALB
+type: application
+
+# version:    the version of THIS chart (bump when you change the chart itself)
+# appVersion: the version of the app being deployed (Wallabag's own version)
+version: 0.1.0
+appVersion: "2.6.10"

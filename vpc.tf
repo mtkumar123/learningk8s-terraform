@@ -6,10 +6,12 @@
 #   VPC 10.0.0.0/16
 #   ├── Internet Gateway
 #   ├── Public subnet  AZ-a  10.0.0.0/24   -> holds the NAT Gateway
+#   ├── Public subnet  AZ-b  10.0.1.0/24   -> ALB (no NAT)
+#   ├── Public subnet  AZ-c  10.0.2.0/24   -> ALB (no NAT)
 #   ├── Private subnet AZ-a  10.0.10.0/24  -> worker nodes
 #   ├── Private subnet AZ-b  10.0.11.0/24  -> worker nodes
 #   ├── Private subnet AZ-c  10.0.12.0/24  -> worker nodes
-#   ├── Public route table  : 0.0.0.0/0 -> IGW     (public subnet)
+#   ├── Public route table  : 0.0.0.0/0 -> IGW     (public subnets)
 #   └── Private route table : 0.0.0.0/0 -> NAT GW  (all private subnets)
 #
 # EKS-specific subnet tags let the cluster auto-discover subnets when creating
@@ -68,6 +70,22 @@ resource "aws_subnet" "public_b" {
 
   tags = {
     Name                     = "${var.cluster_name}-public-${var.availability_zones[1]}"
+    "kubernetes.io/role/elb" = "1"
+  }
+}
+
+# ---- Third public subnet ----------------------------------------------------
+# Optional extra AZ coverage in AZ-c. Like public_b it holds no NAT (we keep
+# the single-NAT design); it exists so an internet-facing ALB can spread across
+# a third AZ. Additive only — nothing existing is recreated.
+resource "aws_subnet" "public_c" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidr_c
+  availability_zone       = var.availability_zones[2]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name                     = "${var.cluster_name}-public-${var.availability_zones[2]}"
     "kubernetes.io/role/elb" = "1"
   }
 }
@@ -134,6 +152,12 @@ resource "aws_route_table_association" "public" {
 # The second public subnet shares the same public route table (0.0.0.0/0 -> IGW).
 resource "aws_route_table_association" "public_b" {
   subnet_id      = aws_subnet.public_b.id
+  route_table_id = aws_route_table.public.id
+}
+
+# The third public subnet also shares the public route table.
+resource "aws_route_table_association" "public_c" {
+  subnet_id      = aws_subnet.public_c.id
   route_table_id = aws_route_table.public.id
 }
 

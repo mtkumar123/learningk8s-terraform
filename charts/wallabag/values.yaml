@@ -1,0 +1,55 @@
+# Default configuration for the Wallabag chart. Override any of these at
+# install time with --set key=value, or with a custom -f myvalues.yaml.
+
+image:
+  repository: wallabag/wallabag
+  tag: "2.6.10"
+  pullPolicy: IfNotPresent
+
+# Number of replicas. Keep at 1: SQLite uses a single ReadWriteOnce volume
+# that cannot be shared across pods.
+replicas: 1
+
+# The external URL users hit. Wallabag REQUIRES knowing its own public URL or
+# generated links/assets break (same idea as Mealie's BASE_URL). Set this to
+# your ALB (or custom domain) DNS. For a port-forward test, http://localhost.
+domainName: "http://localhost"
+
+# SQLite database configuration. The entrypoint auto-creates the schema on
+# first boot when the DB file is empty; the file lives on the PVC so init
+# happens only once and survives restarts.
+database:
+  driver: pdo_sqlite
+  # Path to the SQLite file, on the mounted PVC.
+  path: "/var/www/wallabag/data/db/wallabag.sqlite"
+
+# Persistent storage for /var/www/wallabag/data (SQLite DB + article images).
+storage:
+  className: gp3
+  size: 2Gi
+
+# Container resources. Wallabag is PHP; give it a sensible memory ceiling.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+# Ingress / ALB. Set enabled=false to skip the public ALB and test via
+# `kubectl port-forward` instead.
+ingress:
+  enabled: true
+  # Optional hostname. Leave empty to match any host (uses the ALB DNS name).
+  host: ""
+  # Wallabag has no dedicated health endpoint; the login page at / returns 200.
+  healthcheckPath: /login
+
+# TLS on the ALB. When enabled, the ALB gets an HTTPS:443 listener using the
+# ACM certificate referenced by certArn. certArn is account-specific, so it's
+# left empty here and supplied at deploy time (e.g. --set tls.certArn=...).
+tls:
+  enabled: false
+  certArn: ""
+  # redirectHttp: when true, port 80 issues a 301 redirect to 443.
+  redirectHttp: true

@@ -1,0 +1,66 @@
+# Wallabag application Deployment.
+#
+# Single replica + Recreate strategy: SQLite lives on a ReadWriteOnce EBS
+# volume that only attaches to one pod at a time, so the old pod must fully
+# terminate before the new one starts during an upgrade.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wallabag
+  labels:
+    app: wallabag
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wallabag
+  template:
+    metadata:
+      labels:
+        app: wallabag
+    spec:
+      containers:
+        - name: wallabag
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            # Wallabag is configured entirely through SYMFONY__ENV__* vars,
+            # which the entrypoint bakes into its parameters.yml on boot.
+            - name: SYMFONY__ENV__DATABASE_DRIVER
+              value: {{ .Values.database.driver | quote }}
+            - name: SYMFONY__ENV__DATABASE_PATH
+              value: {{ .Values.database.path | quote }}
+            # Public URL Wallabag uses to build absolute links/assets.
+            - name: SYMFONY__ENV__DOMAIN_NAME
+              value: {{ .Values.domainName | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/wallabag/data
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              memory: {{ .Values.resources.limits.memory | quote }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.ingress.healthcheckPath | quote }}
+              port: http
+            # First boot runs the DB install; give it room before probing.
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.ingress.healthcheckPath | quote }}
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: wallabag-data
