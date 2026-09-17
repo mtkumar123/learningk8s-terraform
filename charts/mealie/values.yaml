@@ -42,3 +42,12 @@ ingress:
   # Optional hostname. Leave empty to match any host (uses the ALB DNS name).
   host: ""
   healthcheckPath: /api/app/about
+
+# TLS on the ALB. When enabled, the ALB gets an HTTPS:443 listener using the
+# ACM certificate referenced by certArn. certArn is account-specific, so it's
+# left empty here and supplied at deploy time (e.g. --set tls.certArn=...).
+tls:
+  enabled: false
+  certArn: ""
+  # redirectHttp: when true, port 80 issues a 301 redirect to 443.
+  redirectHttp: true
