@@ -1,0 +1,12 @@
+# Persistent storage for Mealie's SQLite DB + uploads (/app/data).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mealie-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.storage.className }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.size }}

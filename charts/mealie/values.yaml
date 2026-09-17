@@ -1,0 +1,44 @@
+# Default configuration for the Mealie chart. Override any of these at install
+# time with --set key=value, or with a custom -f myvalues.yaml.
+
+image:
+  repository: ghcr.io/mealie-recipes/mealie
+  tag: v3.26.0
+  pullPolicy: IfNotPresent
+
+# Number of replicas. Keep at 1: Mealie/SQLite uses a single ReadWriteOnce
+# volume that cannot be shared across pods.
+replicas: 1
+
+# The external URL users hit. Set this to your ALB (or custom domain) DNS.
+# Used by Mealie to generate absolute links (emails, redirects). For a quick
+# port-forward test, http://localhost:9925 is fine.
+baseUrl: "http://localhost:9925"
+
+# Application environment.
+env:
+  allowSignup: "false"
+  puid: "1000"
+  pgid: "1000"
+  tz: "Europe/Dublin"
+
+# Persistent storage for /app/data (SQLite DB + uploads).
+storage:
+  className: gp3
+  size: 2Gi
+
+# Container resources. A memory limit is recommended (Python over-allocates).
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1000Mi
+
+# Ingress / ALB. Set enabled=false to skip the public ALB and test via
+# `kubectl port-forward` instead.
+ingress:
+  enabled: true
+  # Optional hostname. Leave empty to match any host (uses the ALB DNS name).
+  host: ""
+  healthcheckPath: /api/app/about

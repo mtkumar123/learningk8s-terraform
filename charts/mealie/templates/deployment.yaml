@@ -1,0 +1,66 @@
+# Mealie application Deployment.
+#
+# Single replica + Recreate strategy: SQLite lives on a ReadWriteOnce EBS
+# volume that only attaches to one pod at a time, so the old pod must fully
+# terminate before the new one starts during an upgrade.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mealie
+  labels:
+    app: mealie
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mealie
+  template:
+    metadata:
+      labels:
+        app: mealie
+    spec:
+      containers:
+        - name: mealie
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 9000
+          env:
+            - name: ALLOW_SIGNUP
+              value: {{ .Values.env.allowSignup | quote }}
+            - name: PUID
+              value: {{ .Values.env.puid | quote }}
+            - name: PGID
+              value: {{ .Values.env.pgid | quote }}
+            - name: TZ
+              value: {{ .Values.env.tz | quote }}
+            - name: BASE_URL
+              value: {{ .Values.baseUrl | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              memory: {{ .Values.resources.limits.memory | quote }}
+          readinessProbe:
+            httpGet:
+              path: /api/app/about
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/app/about
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mealie-data

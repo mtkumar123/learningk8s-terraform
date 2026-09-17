@@ -22,3 +22,5 @@ backend.tf
 # Crash logs
 crash.log
 crash.*.log
+*.crt
+*.key
