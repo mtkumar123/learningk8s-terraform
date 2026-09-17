@@ -1,0 +1,20 @@
+# Persistent storage for Mealie's SQLite database + uploaded data (/app/data/).
+#
+# - storageClassName: gp3 -> explicitly names our CSI-backed class (not relying
+#   on the cluster default), so we always get gp3 via the EBS CSI driver.
+# - ReadWriteOnce -> EBS attaches to one node at a time. Fine: Mealie/SQLite is
+#   single-replica anyway.
+# - The volume is not actually provisioned until the pod is scheduled
+#   (WaitForFirstConsumer on the StorageClass), so it lands in the pod's AZ.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mealie-data
+  namespace: mealie
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 2Gi

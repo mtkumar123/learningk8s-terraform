@@ -1,0 +1,5 @@
+# Dedicated namespace to keep Mealie's objects tidy and isolated.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mealie

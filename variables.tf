@@ -46,9 +46,15 @@ variable "availability_zones" {
 }
 
 variable "public_subnet_cidr" {
-  description = "CIDR for the single public subnet (holds the NAT Gateway). Lives in availability_zones[0]."
+  description = "CIDR for the primary public subnet (holds the NAT Gateway). Lives in availability_zones[0]."
   type        = string
   default     = "10.0.0.0/24"
+}
+
+variable "public_subnet_cidr_b" {
+  description = "CIDR for the second public subnet. An internet-facing ALB requires public subnets in >= 2 AZs. Lives in availability_zones[1]."
+  type        = string
+  default     = "10.0.1.0/24"
 }
 
 variable "private_subnet_cidrs" {

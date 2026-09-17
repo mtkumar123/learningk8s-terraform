@@ -56,6 +56,22 @@ resource "aws_subnet" "public" {
   }
 }
 
+# ---- Second public subnet ---------------------------------------------------
+# An internet-facing ALB requires public subnets in at least 2 AZs. This one
+# lives in AZ-b. It doesn't hold a NAT (we keep the single-NAT design); it
+# exists so the load balancer controller can place a cross-AZ ALB.
+resource "aws_subnet" "public_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidr_b
+  availability_zone       = var.availability_zones[1]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name                     = "${var.cluster_name}-public-${var.availability_zones[1]}"
+    "kubernetes.io/role/elb" = "1"
+  }
+}
+
 # ---- Private subnets --------------------------------------------------------
 # One per AZ, holding the worker nodes (no public IPs). Tagged for internal
 # load balancers.
@@ -112,6 +128,12 @@ resource "aws_route_table" "public" {
 
 resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+# The second public subnet shares the same public route table (0.0.0.0/0 -> IGW).
+resource "aws_route_table_association" "public_b" {
+  subnet_id      = aws_subnet.public_b.id
   route_table_id = aws_route_table.public.id
 }
 

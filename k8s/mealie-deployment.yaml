@@ -1,0 +1,73 @@
+# Mealie application Deployment.
+#
+# Single replica: SQLite is a single file on a ReadWriteOnce EBS volume and
+# cannot be safely shared across pods. strategy: Recreate ensures the old pod
+# (and its volume attachment) is fully torn down before the new one starts,
+# so two pods never contend for the same EBS volume during a rollout.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mealie
+  namespace: mealie
+  labels:
+    app: mealie
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mealie
+  template:
+    metadata:
+      labels:
+        app: mealie
+    spec:
+      containers:
+        - name: mealie
+          image: ghcr.io/mealie-recipes/mealie:v3.26.0
+          ports:
+            - name: http
+              containerPort: 9000 # Mealie serves the app on 9000 inside the container
+          env:
+            - name: ALLOW_SIGNUP
+              value: "false"
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: "Europe/Dublin"
+            # BASE_URL should be the external URL users hit. For initial testing
+            # via port-forward, localhost is fine; we'll update it to the load
+            # balancer DNS once the LoadBalancer Service is created.
+            - name: BASE_URL
+              value: "http://localhost:9925"
+          # Mealie stores its SQLite DB + data here; backed by the PVC.
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          # Recommended memory cap (Python can over-allocate on big hosts).
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              memory: "1000Mi"
+          # Health checks: Mealie exposes /api/app/about once it's up.
+          readinessProbe:
+            httpGet:
+              path: /api/app/about
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/app/about
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mealie-data

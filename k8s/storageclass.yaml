@@ -1,0 +1,23 @@
+# gp3 StorageClass backed by the EBS CSI driver, marked as the cluster default.
+#
+# - provisioner: the EBS CSI driver (installed as an add-on via Terraform).
+# - volumeBindingMode: WaitForFirstConsumer -> the EBS volume is created in the
+#   SAME AZ as the pod that will use it. Critical on multi-AZ clusters: EBS is
+#   zonal, so provisioning before scheduling could place the disk in an AZ with
+#   no room for the pod. Waiting until a pod is scheduled avoids that.
+# - reclaimPolicy: Delete -> deleting the PVC deletes the EBS volume (fine for
+#   a learning cluster; use Retain if you want the data to survive PVC deletion).
+# - allowVolumeExpansion: lets you grow the volume later by editing the PVC.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+  encrypted: "true"
