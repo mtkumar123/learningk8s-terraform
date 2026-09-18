@@ -11,9 +11,9 @@ image:
 replicas: 1
 
 # The external URL users hit. Wallabag REQUIRES knowing its own public URL or
-# generated links/assets break (same idea as Mealie's BASE_URL). Set this to
-# your ALB (or custom domain) DNS. For a port-forward test, http://localhost.
-domainName: "http://localhost"
+# generated links/assets break (same idea as Mealie's BASE_URL). Host-based
+# routing sends requests with this Host header to Wallabag.
+domainName: "https://wallabag.lookuplandinghyrule.fyi"
 
 # SQLite database configuration. The entrypoint auto-creates the schema on
 # first boot when the DB file is empty; the file lives on the PVC so init
@@ -40,8 +40,12 @@ resources:
 # `kubectl port-forward` instead.
 ingress:
   enabled: true
-  # Optional hostname. Leave empty to match any host (uses the ALB DNS name).
-  host: ""
+  # Hostname for host-based routing. The ALB routes requests whose Host header
+  # matches this to Wallabag. Required when sharing an ALB via group.name.
+  host: "wallabag.lookuplandinghyrule.fyi"
+  # group.name merges this Ingress with others of the same group onto ONE
+  # shared ALB. Leave empty for a dedicated ALB.
+  groupName: "shared"
   # Wallabag has no dedicated health endpoint; the login page at / returns 200.
   healthcheckPath: /login
 
