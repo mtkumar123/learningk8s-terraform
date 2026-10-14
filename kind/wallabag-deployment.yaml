@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wallabag
+  labels:
+    app: wallabag
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wallabag
+  template:
+    metadata:
+      labels:
+        app: wallabag
+    spec:
+      containers:
+        - name: wallabag
+          image: wallabag/wallabag:2.6.10
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            # Wallabag is configured through SYMFONY__ENV__* vars, baked into
+            # parameters.yml by the entrypoint on boot.
+            - name: SYMFONY__ENV__DATABASE_DRIVER
+              value: "pdo_sqlite"
+            - name: SYMFONY__ENV__DATABASE_PATH
+              value: "/var/www/wallabag/data/db/wallabag.sqlite"
+            # Public URL for absolute links/assets. Local value for kind; reach
+            # it via `kubectl port-forward svc/wallabag 8080:80`.
+            - name: SYMFONY__ENV__DOMAIN_NAME
+              value: "http://localhost:8080"
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/wallabag/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: http
+            # First boot runs the DB install; give it room before probing.
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: wallabag-data

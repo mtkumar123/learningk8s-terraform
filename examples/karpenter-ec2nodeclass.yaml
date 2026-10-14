@@ -1,0 +1,77 @@
+# =============================================================================
+# Karpenter EC2NodeClass example -- EKS
+#
+# WHAT IT IS
+#   EC2NodeClass is the AWS-facing half of Karpenter's config. It describes HOW
+#   a node is built on AWS: the node IAM role, the AMI, and which subnets and
+#   security groups to attach. A NodePool (the Kubernetes-facing policy for
+#   WHAT/WHEN to provision) references this EC2NodeClass by name.
+#
+#   Split of responsibilities:
+#     EC2NodeClass -> AWS details (role, AMI, subnets, SGs)   <-- this file
+#     NodePool     -> constraints (instance types, zones, spot/on-demand,
+#                     limits, consolidation) + a ref to this EC2NodeClass
+#
+# WHY SELECTORS ARE REQUIRED HERE
+#   Unlike a managed node group (which auto-attaches the EKS cluster security
+#   group), Karpenter builds its own launch template, so it must be TOLD which
+#   subnets and security groups to use. That's what the *SelectorTerms do -- they
+#   discover AWS resources by tag or id.
+#
+# PREREQUISITES (AWS side)
+#   * A node IAM role (same policies as a normal EKS node role:
+#     AmazonEKSWorkerNodePolicy, AmazonEC2ContainerRegistryReadOnly,
+#     AmazonEKS_CNI_Policy). Referenced below as `role`.
+#   * Subnets and security groups tagged for discovery, e.g.:
+#       karpenter.sh/discovery = <cluster-name>
+#     Tag the private subnets and the cluster security group with this so the
+#     selectors below can find them.
+# =============================================================================
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  # IAM role that LAUNCHED NODES assume (the node/instance role -- equivalent to
+  # your aws_eks_node_group node_role_arn). Karpenter uses an instance profile
+  # for this role to boot the EC2 instances.
+  role: "KarpenterNodeRole-my-cluster"
+
+  # AMI family Karpenter bases nodes on. AL2023 is the current EKS-optimized
+  # default; others include Bottlerocket, AL2, Windows.
+  amiFamily: AL2023
+
+  # Which specific AMI(s) to use. `alias` tracks the latest EKS-optimized image
+  # for the family + cluster version automatically.
+  amiSelectorTerms:
+    - alias: al2023@latest
+
+  # WHERE to place nodes. Karpenter discovers subnets by tag. Tag your private
+  # subnets with karpenter.sh/discovery=<cluster-name>.
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: "my-cluster"
+
+  # WHICH security groups to attach. Point this at the EKS cluster security
+  # group (so nodes <-> control plane and node <-> node traffic works). Either
+  # discover it by tag (shown) or pin it by id.
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: "my-cluster"
+    # Alternative: pin the cluster SG directly --
+    #   - id: sg-0abc123...   # aws_eks_cluster.main.vpc_config[0].cluster_security_group_id
+
+  # Optional: root volume config for the launched nodes.
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 20Gi
+        volumeType: gp3
+        encrypted: true
+# -----------------------------------------------------------------------------
+# Next: a NodePool references this class via spec.template.spec.nodeClassRef and
+# adds the scheduling constraints (instance types/sizes, zones, capacityType,
+# cpu limits, consolidation policy). The NodePool is what Karpenter consults
+# when it sees Pending pods; this EC2NodeClass supplies the AWS build details.
+# Replace "my-cluster" / role name with your real values before applying.
+# -----------------------------------------------------------------------------

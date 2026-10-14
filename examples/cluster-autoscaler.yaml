@@ -1,0 +1,91 @@
+# =============================================================================
+# Cluster Autoscaler (CA) example -- EKS
+#
+# WHAT IT DOES
+#   CA scales NODES (not pods). When pods are Pending because no node has room,
+#   CA increases the desiredCapacity of an EKS managed node group / ASG so AWS
+#   launches another node. When nodes are underutilized and their pods can fit
+#   elsewhere, CA drains and removes them.
+#
+# HOW IT WORKS (the loop)
+#   1. Pods become Pending (unschedulable -- insufficient CPU/mem on all nodes).
+#   2. CA detects the unschedulable pods.
+#   3. CA finds a node group whose instance type WOULD fit the pods and bumps
+#      that ASG's desired count by 1+.
+#   4. AWS ASG launches a node of that group's PREDEFINED instance type; the
+#      Pending pods schedule onto it.
+#   5. Scale-down: a node underutilized for ~10m (default), with its pods
+#      reschedulable elsewhere and within PodDisruptionBudgets, is drained and
+#      the ASG desired count decremented.
+#
+#   KEY CONSTRAINT: CA only adds MORE of instance types you already defined as
+#   node groups. For instance-type variety you create multiple node groups and
+#   CA picks among them. (This is the limitation Karpenter removes by launching
+#   right-sized instances directly.)
+#
+# AWS SIDE -- required before this works
+#   * The node group's ASG must be discoverable. CA auto-discovers ASGs tagged:
+#       k8s.io/cluster-autoscaler/enabled                = true
+#       k8s.io/cluster-autoscaler/<cluster-name>         = owned
+#   * The CA pod needs AWS permissions (autoscaling:*, ec2:Describe*, etc.)
+#     via an IAM role -- on EKS attach it through Pod Identity or IRSA to this
+#     ServiceAccount (same pattern as your EBS CSI / ALB controller roles).
+#   * Node group min/max sizes bound how far CA can scale (CA changes desired
+#     within the ASG's min..max).
+# =============================================================================
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-system
+  # On EKS, grant AWS perms to this SA via Pod Identity association or an IRSA
+  # role-arn annotation. Example (IRSA):
+  #   annotations:
+  #     eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/<cluster>-ca-role
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-system
+  labels:
+    app: cluster-autoscaler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cluster-autoscaler
+  template:
+    metadata:
+      labels:
+        app: cluster-autoscaler
+    spec:
+      serviceAccountName: cluster-autoscaler
+      containers:
+        - name: cluster-autoscaler
+          image: registry.k8s.io/autoscaling/cluster-autoscaler:v1.30.0  # match cluster version
+          command:
+            - ./cluster-autoscaler
+            - --cloud-provider=aws
+            # Auto-discover ASGs by the tags noted above (no need to list groups).
+            - --node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/<cluster-name>
+            # Prefer the node group that wastes the least capacity for pending pods.
+            - --expander=least-waste
+            # Scale-down tuning (defaults shown for clarity).
+            - --scale-down-unneeded-time=10m
+            - --balance-similar-node-groups
+            # Don't evict pods that lack a controller / use local storage.
+            - --skip-nodes-with-local-storage=false
+          resources:
+            requests:
+              cpu: 100m
+              memory: 300Mi
+            limits:
+              memory: 500Mi
+# -----------------------------------------------------------------------------
+# RBAC (ClusterRole/ClusterRoleBinding) is also required so CA can read pods/
+# nodes and evict during scale-down. The official AWS CA manifest bundles it:
+#   https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler/cloudprovider/aws
+# Replace <cluster-name> above with your actual EKS cluster name.
+# -----------------------------------------------------------------------------

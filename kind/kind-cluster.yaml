@@ -1,0 +1,11 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: local-dev
+
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: /home/CHANGE_ME/kind-data/mealie
+        containerPath: /mnt/disks/mealie
+      - hostPath: /home/CHANGE_ME/kind-data/wallabag
+        containerPath: /mnt/disks/wallabag

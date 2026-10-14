@@ -1,0 +1,71 @@
+# =============================================================================
+# HorizontalPodAutoscaler (HPA) example
+#
+# WHAT IT DOES
+#   An HPA scales a Deployment's pod count up/down based on observed metrics
+#   (here: average CPU utilization). A Deployment on its own has a fixed
+#   `replicas` count and does NOT react to load -- the HPA is the object that
+#   adds/removes pods automatically.
+#
+# HOW HPA WORKS
+#   1. It targets a workload (scaleTargetRef -> the Deployment below).
+#   2. Every ~15s the HPA controller reads current pod CPU/memory from the
+#      Kubernetes Metrics API and compares it to the target threshold.
+#   3. It computes the desired replica count:
+#         desired = ceil(currentReplicas * (currentMetric / targetMetric))
+#      e.g. 4 pods at 140% of a 70% target -> scale toward 8 pods.
+#   4. It writes the new count to the Deployment, staying within
+#      minReplicas..maxReplicas. Kubernetes then rolls pods in/out.
+#   5. Scale-down is gradual (stabilization window) to avoid flapping.
+#
+#   NOTE: utilization is measured as a percentage of the pod's CPU *request*,
+#   so the target Deployment MUST set resources.requests.cpu or the HPA cannot
+#   compute a percentage (it will show <unknown>).
+#
+# METRICS-SERVER (required dependency)
+#   HPA does not gather metrics itself -- it reads them from the Metrics API,
+#   which is served by `metrics-server`, a lightweight cluster add-on that:
+#     * scrapes CPU/memory usage from each node's kubelet,
+#     * exposes current usage via the Metrics API,
+#     * also powers `kubectl top nodes` / `kubectl top pods`.
+#   It keeps only ~the last minute of data in memory (no history -- use
+#   Prometheus for that). It is NOT installed by default on EKS; install with:
+#     kubectl apply -f \
+#       https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+#   Verify with: kubectl top nodes
+#   Without metrics-server, a CPU/memory HPA stays at <unknown> and won't scale.
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: wallabag
+  namespace: wallabag
+spec:
+  # The workload to scale.
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: wallabag
+  # Lower/upper bounds -- HPA never scales outside this range.
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Add pods when average CPU across pods exceeds 70% of the
+          # requested CPU; remove pods when sustained below it.
+          averageUtilization: 70
+# -----------------------------------------------------------------------------
+# Reminder: the target Deployment must declare CPU requests, e.g.
+#   spec:
+#     template:
+#       spec:
+#         containers:
+#           - name: wallabag
+#             resources:
+#               requests:
+#                 cpu: 250m   # HPA computes utilization against this value
+# -----------------------------------------------------------------------------

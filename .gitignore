@@ -24,3 +24,4 @@ crash.log
 crash.*.log
 *.crt
 *.key
+.DS_Store

@@ -1,0 +1,60 @@
+kind: Deployment
+metadata:
+  name: mealie
+  labels:
+    app: mealie
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mealie
+  template:
+    metadata:
+      labels:
+        app: mealie
+    spec:
+      containers:
+        - name: mealie
+          image: ghcr.io/mealie-recipes/mealie:v3.26.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 9000
+          env:
+            - name: ALLOW_SIGNUP
+              value: "false"
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: "Europe/Dublin"
+            - name: BASE_URL
+              value: "http://localhost:9000"
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1000Mi
+          readinessProbe:
+            httpGet:
+              path: /api/app/about
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/app/about
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mealie-data

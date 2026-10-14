@@ -1,0 +1,92 @@
+# =============================================================================
+# Karpenter NodePool example -- EKS
+#
+# WHAT IT IS
+#   NodePool is the Kubernetes-facing policy: WHAT kinds of nodes Karpenter may
+#   create and WHEN to remove them. It references an EC2NodeClass (the AWS
+#   "how to build the instance" layer) via nodeClassRef.
+#
+#   Split of responsibilities:
+#     NodePool     -> constraints (instance types, zones, spot/on-demand,
+#                     limits) + disruption/consolidation rules      <-- this file
+#     EC2NodeClass -> AWS build details (role, AMI, subnets, SGs)
+#
+# PROVISIONING FLOW
+#   Pending pod -> Karpenter checks this NodePool's `requirements` + `limits`
+#   -> picks the CHEAPEST instance type that fits the pod and satisfies all
+#   requirements -> launches it using the referenced EC2NodeClass -> pod binds.
+# =============================================================================
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  template:
+    spec:
+      # Link to the EC2NodeClass (AWS-level "how to build" config).
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+
+      # The MENU of instances Karpenter may choose from. It picks the cheapest
+      # option satisfying ALL requirements AND the pending pods' needs.
+      # Broader menu = better bin-packing / lower cost; narrower = more control.
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64"]              # Graviton, matches a t4g setup
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]  # prefer spot, fall back to on-demand
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: ["t", "m"]
+        - key: karpenter.k8s.aws/instance-size
+          operator: In
+          values: ["small", "medium", "large"]
+
+  # ---- Disruption: how Karpenter REMOVES / REPLACES nodes -------------------
+  # consolidationPolicy:
+  #   WhenEmptyOrUnderutilized -> remove empty nodes AND repack workloads onto
+  #                               fewer/cheaper nodes when it saves money.
+  #   WhenEmpty                -> only remove nodes with zero workload pods.
+  # consolidateAfter -> how long a node must stay empty/underutilized before
+  #                     Karpenter acts (debounce to avoid churn).
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s
+    # Optional: cap how aggressively nodes are disrupted at once.
+    # budgets:
+    #   - nodes: "10%"
+
+  # Hard ceiling on total resources this pool can provision (safety stop).
+  limits:
+    cpu: "100"
+    memory: 200Gi
+# -----------------------------------------------------------------------------
+# HOW DISRUPTION / CONSOLIDATION WORKS
+#   Karpenter continuously evaluates whether the current nodes are the cheapest
+#   way to run the current pods. Three disruption mechanisms:
+#     1. Empty node consolidation  -> a node with no workload pods is removed.
+#     2. Multi-node consolidation  -> several underused nodes' pods are repacked
+#        onto fewer nodes; the now-empty ones are terminated.
+#     3. Single-node replacement   -> one node is swapped for a cheaper/smaller
+#        instance that still fits its pods (e.g. large -> medium, or on-demand
+#        -> spot).
+#   Before terminating, Karpenter cordons + drains the node (respecting
+#   PodDisruptionBudgets and graceful termination) so pods reschedule cleanly.
+#
+# WHY THIS BEATS CLUSTER AUTOSCALER (CA)
+#   * Direct provisioning: CA only changes the desired count of PRE-DEFINED node
+#     groups (fixed instance types). Karpenter launches a right-sized instance
+#     chosen from a broad pool per the requirements above -- no node-group
+#     juggling.
+#   * Better bin-packing / cost: Karpenter looks at the actual pending pods and
+#     active consolidation repacks workloads onto fewer/cheaper nodes. CA has no
+#     equivalent repacking -- it mostly just removes idle nodes.
+#   * Spot + instance diversity in one pool: CA needs a separate node group per
+#     instance type/capacity type; Karpenter expresses it all as requirements.
+#   * Faster: Karpenter calls EC2 directly rather than waiting on ASG desired-
+#     count reconciliation.
+# -----------------------------------------------------------------------------
